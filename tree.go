@@ -72,12 +72,19 @@ const (
 )
 
 type node struct {
+	// 当前节点URL路径
 	path      string
+	// 保留的子节点的第一个字符
 	indices   string
+	// 判断当前节点路径是否含有参数的节点 比如： /user/:name
 	wildChild bool
+	// 节点类型
 	nType     nodeType
+	// 优先级
 	priority  uint32
+	// 当前节点的所有直接子节点
 	children  []*node
+	// 节点对应的 handler
 	handle    Handle
 }
 
@@ -106,6 +113,7 @@ func (n *node) incrementChildPrio(pos int) int {
 
 // addRoute adds a node with the given handle to the path.
 // Not concurrency-safe!
+// addRoute 负责把传入的 handle 添加到路径中
 func (n *node) addRoute(path string, handle Handle) {
 	fullPath := path
 	n.priority++

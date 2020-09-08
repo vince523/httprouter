@@ -86,6 +86,7 @@ import (
 // Handle is a function that can be registered to a route to handle HTTP
 // requests. Like http.HandlerFunc, but has a third parameter for the values of
 // wildcards (path variables).
+// 这个签名和 http.HandleFunc 的很像，多了个 params,用于参数绑定
 type Handle func(http.ResponseWriter, *http.Request, Params)
 
 // Param is a single URL parameter, consisting of a key and a value.
@@ -135,6 +136,7 @@ func (ps Params) MatchedRoutePath() string {
 
 // Router is a http.Handler which can be used to dispatch requests to different
 // handler functions via configurable routes
+// Router 是一个 http.Handler 可以通过定义路由请求分发到不同 handler 函数
 type Router struct {
 	trees map[string]*node
 
@@ -145,6 +147,7 @@ type Router struct {
 	// before invoking the handler.
 	// The matched route path is only added to handlers of routes that were
 	// registered when this option was enabled.
+	// 开启后，在handle函数被调用前缓存匹配的路由路径
 	SaveMatchedRoutePath bool
 
 	// Enables automatic redirection if the current route can't be matched but a
@@ -152,6 +155,8 @@ type Router struct {
 	// For example if /foo/ is requested but a route only exists for /foo, the
 	// client is redirected to /foo with http status code 301 for GET requests
 	// and 308 for all other request methods.
+	// 开启后，自动处理当访问路径后带 /
+	// 比如： 访问 /foo/ 此时没有定义 /foo/ 路由，只定义了 /foo ，开启该参数后会重定向到 /foo
 	RedirectTrailingSlash bool
 
 	// If enabled, the router tries to fix the current request path, if no
@@ -163,6 +168,7 @@ type Router struct {
 	// all other request methods.
 	// For example /FOO and /..//Foo could be redirected to /foo.
 	// RedirectTrailingSlash is independent of this option.
+	// 自动修正路径， 比如 // 或者是 ../
 	RedirectFixedPath bool
 
 	// If enabled, the router checks if another method is allowed for the
@@ -171,10 +177,12 @@ type Router struct {
 	// and HTTP status code 405.
 	// If no other Method is allowed, the request is delegated to the NotFound
 	// handler.
+	// 用来检查当前请求方法是否被允许
 	HandleMethodNotAllowed bool
 
 	// If enabled, the router automatically replies to OPTIONS requests.
 	// Custom OPTIONS handlers take priority over automatic replies.
+	// 开启后，自动回复 OPTIONS 请求
 	HandleOPTIONS bool
 
 	// An optional http.Handler that is called on automatic OPTIONS requests.
@@ -295,6 +303,7 @@ func (r *Router) Handle(method, path string, handle Handle) {
 	if method == "" {
 		panic("method must not be empty")
 	}
+	// 验证路径是否合法， 必须是 / 开头， /foo 是可以的， foo 会panic
 	if len(path) < 1 || path[0] != '/' {
 		panic("path must begin with '/' in path '" + path + "'")
 	}
@@ -307,10 +316,12 @@ func (r *Router) Handle(method, path string, handle Handle) {
 		handle = r.saveMatchedRoutePath(path, handle)
 	}
 
+	// 初始化 trees
 	if r.trees == nil {
 		r.trees = make(map[string]*node)
 	}
 
+	// 因为路由是基数树，全部都是从根节点开始，不存在就注册一个根节点，这里是每种请求方法是一个根节点，会存在多棵树
 	root := r.trees[method]
 	if root == nil {
 		root = new(node)
@@ -459,33 +470,45 @@ func (r *Router) allowed(path, reqMethod string) (allow string) {
 
 // ServeHTTP makes the router implement the http.Handler interface.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	// panic 处理
 	if r.PanicHandler != nil {
 		defer r.recv(w, req)
 	}
 
+	// 获取请求路径
 	path := req.URL.Path
 
+
+	// 先查找请求方法是否存在
 	if root := r.trees[req.Method]; root != nil {
+		// 到基数树中查找匹配的路由
 		if handle, ps, tsr := root.getValue(path, r.getParams); handle != nil {
+			// 携带param的路径
 			if ps != nil {
 				handle(w, req, *ps)
 				r.putParams(ps)
+				// 没有param 参数的路径
 			} else {
 				handle(w, req, nil)
 			}
 			return
+			// 当没有找到，且请求方法不是 CONNECT 路径也不是 / 的时候
 		} else if req.Method != http.MethodConnect && path != "/" {
 			// Moved Permanently, request with GET method
+			// 默认 301
 			code := http.StatusMovedPermanently
 			if req.Method != http.MethodGet {
 				// Permanent Redirect, request with same method
+				// 不是 GET 方法
 				code = http.StatusPermanentRedirect
 			}
 
+			// tsr 用于判断是否需要重定向，就是👆说的 路径末尾是否带了 / 例如：传过来的 /foo/ ，而定义的是 /foo, 这时候 tsr 就返回 true, 前提是 RedirectTrailingSlashs 开启
 			if tsr && r.RedirectTrailingSlash {
 				if len(path) > 1 && path[len(path)-1] == '/' {
 					req.URL.Path = path[:len(path)-1]
 				} else {
+					// 不是 / 结尾，给加上
 					req.URL.Path = path + "/"
 				}
 				http.Redirect(w, req, req.URL.String(), code)
@@ -493,6 +516,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			}
 
 			// Try to fix the request path
+			// 尝试自动修正路径
 			if r.RedirectFixedPath {
 				fixedPath, found := root.findCaseInsensitivePath(
 					CleanPath(path),
